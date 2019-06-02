@@ -303,7 +303,6 @@ def main(args):
     logger.close()
 
 if __name__ == '__main__':
-    # import crash_on_ipy
     parser = argparse.ArgumentParser(description='Hyperparams')
     parser.add_argument('--arch', nargs='?', type=str, default='resnet50')
     parser.add_argument('--img_size', nargs='?', type=int, default=640, 
