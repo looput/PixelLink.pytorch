@@ -1,6 +1,6 @@
 # PixelLink
 
-This code is based on PixlLink and PseNet, the performance is not satisfactory
+This code is based on PixlLink and PSENet, the performance is not satisfactory
 
 ## Requirements
 * Python 3.6
