@@ -58,7 +58,7 @@ def evaluate_method(gtFilePath, submFilePath, evaluationParams):
         - samples (optional) Per sample metrics. Ex: {'sample1' : { 'Precision':0.8,'Recall':0.9 } , 'sample2' : { 'Precision':0.8,'Recall':0.9 }
     """    
     
-    for module,alias in evaluation_imports().iteritems():
+    for module,alias in list(evaluation_imports().items()):
         globals()[alias] = importlib.import_module(module)    
     
     def polygon_from_points(points):
@@ -212,7 +212,7 @@ def evaluate_method(gtFilePath, submFilePath, evaluationParams):
                         continue
                     bbox = line.split(',')
                     if len(bbox) % 2 == 1:
-                        print path
+                        print(path)
                     bbox = [(int)(x) for x in bbox]
                     pointsList.append(bbox)
                 return pointsList
@@ -336,4 +336,4 @@ def evaluate_method(gtFilePath, submFilePath, evaluationParams):
 if __name__=='__main__':
         
     rrc_evaluation_funcs.main_evaluation(None,default_evaluation_params,validate_data,evaluate_method)
-    print ''
+    print('')

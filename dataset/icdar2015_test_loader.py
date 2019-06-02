@@ -27,7 +27,11 @@ def get_img(img_path):
 def scale(img, long_size=2240):
     h, w = img.shape[0:2]
     scale = long_size * 1.0 / max(h, w)
-    img = cv2.resize(img, dsize=None, fx=scale, fy=scale)
+    sh,sw=h*scale,w*scale
+
+    sw=int(sw/32)*32
+    sh=int(sh/32)*32
+    img = cv2.resize(img, dsize=(1280,768))
     return img
 
 class IC15TestLoader(data.Dataset):

@@ -1,15 +1,22 @@
 # dataloader add 3.0 scale
 # dataloader add filer text
+import random
+import sys
+# sys.path.extend('/workspace/lupu/pixellink.pytorch')
+
+import cv2
 import numpy as np
+import Polygon as plg
+import pyclipper
+import torch
+import torchvision.transforms as transforms
 from PIL import Image
 from torch.utils import data
+
 import util
-import cv2
-import random
-import torchvision.transforms as transforms
-import torch
-import pyclipper
-import Polygon as plg
+from pixel_link import cal_gt_for_single_image
+
+from .transfrom import build_transfrom
 
 ic15_root_dir = './data/icdar2015/'
 ic15_train_data_dir = ic15_root_dir + 'train_images/'
@@ -38,13 +45,14 @@ def get_bboxes(img, gt_path):
         line = util.str.remove_all(line, '\ufeff')
         gt = util.str.split(line, ',')
         if gt[-1][0] == '#':
-            tags.append(False)
+            tags.append(-1)
         else:
-            tags.append(True)
+            tags.append(1)
         box = [int(gt[i]) for i in range(8)]
-        box = np.asarray(box) / ([w * 1.0, h * 1.0] * 4)
+        # box = np.asarray(box) / ([w * 1.0, h * 1.0] * 4)
+        box = np.asarray(box)
         bboxes.append(box)
-    return np.array(bboxes), tags
+    return np.array(bboxes), np.array(tags)
 
 def random_horizontal_flip(imgs):
     if random.random() < 0.5:
@@ -146,12 +154,10 @@ def shrink(bboxes, rate, max_shr=20):
     return np.array(shrinked_bboxes)
 
 class IC15Loader(data.Dataset):
-    def __init__(self, is_transform=False, img_size=None, kernel_num=7, min_scale=0.4):
+    def __init__(self, is_transform=False, img_size=None):
         self.is_transform = is_transform
         
         self.img_size = img_size if (img_size is None or isinstance(img_size, tuple)) else (img_size, img_size)
-        self.kernel_num = kernel_num
-        self.min_scale = min_scale
 
         data_dirs = [ic15_train_data_dir]
         gt_dirs = [ic15_train_gt_dir]
@@ -159,6 +165,8 @@ class IC15Loader(data.Dataset):
         self.img_paths = []
         self.gt_paths = []
 
+        self.transfrom=build_transfrom()
+        
         for data_dir, gt_dir in zip(data_dirs, gt_dirs):
             img_names = util.io.ls(data_dir, '.jpg')
             img_names.extend(util.io.ls(data_dir, '.png'))
@@ -188,42 +196,23 @@ class IC15Loader(data.Dataset):
         bboxes, tags = get_bboxes(img, gt_path)
         
         if self.is_transform:
-            img = random_scale(img, self.img_size[0])
-
-        gt_text = np.zeros(img.shape[0:2], dtype='uint8')
-        training_mask = np.ones(img.shape[0:2], dtype='uint8')
-        if bboxes.shape[0] > 0:
-            bboxes = np.reshape(bboxes * ([img.shape[1], img.shape[0]] * 4), (bboxes.shape[0], int(bboxes.shape[1] / 2), 2)).astype('int32')
-            for i in range(bboxes.shape[0]):
-                cv2.drawContours(gt_text, [bboxes[i]], -1, i + 1, -1)
-                if not tags[i]:
-                    cv2.drawContours(training_mask, [bboxes[i]], -1, 0, -1)
-
-        gt_kernels = []
-        for i in range(1, self.kernel_num):
-            rate = 1.0 - (1.0 - self.min_scale) / (self.kernel_num - 1) * i
-            gt_kernel = np.zeros(img.shape[0:2], dtype='uint8')
-            kernel_bboxes = shrink(bboxes, rate)
-            for i in range(bboxes.shape[0]):
-                cv2.drawContours(gt_kernel, [kernel_bboxes[i]], -1, 1, -1)
-            gt_kernels.append(gt_kernel)
-
-        if self.is_transform:
-            imgs = [img, gt_text, training_mask]
-            imgs.extend(gt_kernels)
-
-            imgs = random_horizontal_flip(imgs)
-            imgs = random_rotate(imgs)
-            imgs = random_crop(imgs, self.img_size)
-
-            img, gt_text, training_mask, gt_kernels = imgs[0], imgs[1], imgs[2], imgs[3:]
+            # img = random_scale(img, self.img_size[0])
+            # img = cv2.resize(img, (self.img_size[0],self.img_size[1]))
+            # TODO use transfrom here
+            bboxes=np.reshape(bboxes,(-1,4,2)).astype(np.float)
+            img,bboxes,tags=self.transfrom(img,bboxes,tags)
         
-        gt_text[gt_text > 0] = 1
-        gt_kernels = np.array(gt_kernels)
+        # show image
+    
+        h,w,_=img.shape
+        bboxes[:,:,0]/=w
+        bboxes[:,:,1]/=h
+        pixel_cls_label, pixel_cls_weight, \
+        pixel_link_label, pixel_link_weight = cal_gt_for_single_image(bboxes[:,:,0], bboxes[:,:,1], tags)
 
         # '''
         if self.is_transform:
-            img = Image.fromarray(img)
+            img = Image.fromarray(img.astype(np.uint8))
             img = img.convert('RGB')
             img = transforms.ColorJitter(brightness = 32.0 / 255, saturation = 0.5)(img)
         else:
@@ -233,9 +222,29 @@ class IC15Loader(data.Dataset):
         img = transforms.ToTensor()(img)
         img = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])(img)
 
-        gt_text = torch.from_numpy(gt_text).float()
-        gt_kernels = torch.from_numpy(gt_kernels).float()
-        training_mask = torch.from_numpy(training_mask).float()
-        # '''
+        cls_label = torch.from_numpy(pixel_cls_label).float()
+        cls_weight = torch.from_numpy(pixel_cls_weight)
+        link_label = torch.from_numpy(pixel_link_label).float()
+        link_weight = torch.from_numpy(pixel_link_weight)
 
-        return img, gt_text, gt_kernels, training_mask
+        return img, cls_label,  cls_weight,  link_label,  link_weight
+
+
+def test():
+    import matplotlib
+    matplotlib.use('TkAgg')
+
+    import matplotlib.pyplot as plt
+    dataloader=IC15Loader(is_transform=True)
+    
+    for i in range(100):
+        img, cls_label,  cls_weight,  link_label,  link_weight=dataloader.__getitem__(i)
+
+        ax1=plt.subplot(2,2,1)
+        ax1.imshow(np.transpose((img.numpy()*255).astype(np.uint8),(1,2,0)))
+        ax2=plt.subplot(2,2,2)
+        ax2.imshow(cls_label.numpy())
+        ax3=plt.subplot(2,2,3)
+        ax3.imshow(cls_weight.numpy())
+
+        plt.show()      

@@ -99,4 +99,7 @@ ENV/
 
 # mypy
 .mypy_cache/
-checkpoints
+checkpoints/*
+data/*
+outputs/*
+*bak

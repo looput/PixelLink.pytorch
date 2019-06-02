@@ -431,7 +431,7 @@ def get_rect_iou(rects1, rects2):
 def find_contours(mask):
     mask = np.asarray(mask, dtype = np.uint8)
     mask = mask.copy()
-    contours, _ = cv2.findContours(mask, mode = cv2.RETR_CCOMP, 
+    _,contours,_ = cv2.findContours(mask, mode = cv2.RETR_CCOMP, 
                                    method = cv2.CHAIN_APPROX_SIMPLE)
     return contours
 

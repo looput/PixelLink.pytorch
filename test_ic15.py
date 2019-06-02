@@ -15,15 +15,12 @@ from torch.utils import data
 from dataset import IC15TestLoader
 import models
 import util
-# c++ version pse based on opencv 3+
-# from pse import pse
-# python pse
-from pypse import pse as pypse
 
-def extend_3c(img):
-    img = img.reshape(img.shape[0], img.shape[1], 1)
-    img = np.concatenate((img, img, img), axis=2)
-    return img
+# import matplotlib
+# matplotlib.use('TkAgg')
+# import matplotlib.pyplot as plt 
+
+from pixel_link import decode_batch,mask_to_bboxes
 
 def debug(idx, img_paths, imgs, output_root):
     if not os.path.exists(output_root):
@@ -40,6 +37,8 @@ def debug(idx, img_paths, imgs, output_root):
     res = np.concatenate(col, axis=0)
     img_name = img_paths[idx].split('/')[-1]
     print(idx, '/', len(img_paths), img_name)
+    # plt.imshow(res)
+    # plt.show()
     cv2.imwrite(output_root + img_name, res)
 
 def write_result_as_txt(image_name, bboxes, path):
@@ -51,21 +50,12 @@ def write_result_as_txt(image_name, bboxes, path):
         lines.append(line)
     util.io.write_lines(filename, lines)
 
-def polygon_from_points(points):
-    """
-    Returns a Polygon object to use with the Polygon2 class from a list of 8 points: x1,y1,x2,y2,x3,y3,x4,y4
-    """
-    resBoxes=np.empty([1, 8],dtype='int32')
-    resBoxes[0, 0] = int(points[0])
-    resBoxes[0, 4] = int(points[1])
-    resBoxes[0, 1] = int(points[2])
-    resBoxes[0, 5] = int(points[3])
-    resBoxes[0, 2] = int(points[4])
-    resBoxes[0, 6] = int(points[5])
-    resBoxes[0, 3] = int(points[6])
-    resBoxes[0, 7] = int(points[7])
-    pointMat = resBoxes[0].reshape([2, 4]).T
-    return plg.Polygon(pointMat)
+
+def to_bboxes(image_data, pixel_pos_scores, link_pos_scores):
+    link_pos_scores=np.transpose(link_pos_scores,(0,2,3,1))    
+    mask = decode_batch(pixel_pos_scores, link_pos_scores,0.6,0.9)[0, ...]
+    bboxes = mask_to_bboxes(mask, image_data.shape)
+    return mask,bboxes
 
 def test(args):
     data_loader = IC15TestLoader(long_size=args.long_size)
@@ -78,11 +68,13 @@ def test(args):
 
     # Setup Model
     if args.arch == "resnet50":
-        model = models.resnet50(pretrained=True, num_classes=7, scale=args.scale)
+        model = models.resnet50(pretrained=True, num_classes=18, scale=args.scale)
     elif args.arch == "resnet101":
-        model = models.resnet101(pretrained=True, num_classes=7, scale=args.scale)
+        model = models.resnet101(pretrained=True, num_classes=18, scale=args.scale)
     elif args.arch == "resnet152":
-        model = models.resnet152(pretrained=True, num_classes=7, scale=args.scale)
+        model = models.resnet152(pretrained=True, num_classes=18, scale=args.scale)
+    elif args.arch == "vgg16":
+        model = models.vgg16(pretrained=True,num_classes=18)
     
     for param in model.parameters():
         param.requires_grad = False
@@ -123,42 +115,20 @@ def test(args):
         torch.cuda.synchronize()
         start = time.time()
 
-        outputs = model(img)
+        cls_logits,link_logits = model(img)
 
-        score = torch.sigmoid(outputs[:, 0, :, :])
-        outputs = (torch.sign(outputs - args.binary_th) + 1) / 2
+        outputs=torch.cat((cls_logits,link_logits),dim=1)
+        shape=outputs.shape
+        pixel_pos_scores=F.softmax(outputs[:,0:2,:,:],dim=1)[:,1,:,:]
+        # pixel_pos_scores=torch.sigmoid(outputs[:,1,:,:])
+        # FIXME the dimention should be changed
+        link_scores=outputs[:,2:,:,:].view(shape[0],2,8,shape[2],shape[3])
+        link_pos_scores=F.softmax(link_scores,dim=1)[:,1,:,:,:]
 
-        text = outputs[:, 0, :, :]
-        kernels = outputs[:, 0:args.kernel_num, :, :] * text
+        mask,bboxes=to_bboxes(org_img,pixel_pos_scores.cpu().numpy(),link_pos_scores.cpu().numpy())
 
-        score = score.data.cpu().numpy()[0].astype(np.float32)
-        text = text.data.cpu().numpy()[0].astype(np.uint8)
-        kernels = kernels.data.cpu().numpy()[0].astype(np.uint8)
-        
-        # c++ version pse
-        # pred = pse(kernels, args.min_kernel_area / (args.scale * args.scale))
-        # python version pse
-        pred = pypse(kernels, args.min_kernel_area / (args.scale * args.scale))
-        
-        # scale = (org_img.shape[0] * 1.0 / pred.shape[0], org_img.shape[1] * 1.0 / pred.shape[1])
-        scale = (org_img.shape[1] * 1.0 / pred.shape[1], org_img.shape[0] * 1.0 / pred.shape[0])
-        label = pred
-        label_num = np.max(label) + 1
-        bboxes = []
-        for i in range(1, label_num):
-            points = np.array(np.where(label == i)).transpose((1, 0))[:, ::-1]
-
-            if points.shape[0] < args.min_area / (args.scale * args.scale):
-                continue
-
-            score_i = np.mean(score[label == i])
-            if score_i < args.min_score:
-                continue
-
-            rect = cv2.minAreaRect(points)
-            bbox = cv2.boxPoints(rect) * scale
-            bbox = bbox.astype('int32')
-            bboxes.append(bbox.reshape(-1))
+        score = pixel_pos_scores[0,:,:]
+        score = score.data.cpu().numpy().astype(np.float32)   
 
         torch.cuda.synchronize()
         end = time.time()
@@ -173,18 +143,26 @@ def test(args):
         image_name = data_loader.img_paths[idx].split('/')[-1].split('.')[0]
         write_result_as_txt(image_name, bboxes, 'outputs/submit_ic15/')
         
-        text_box = cv2.resize(text_box, (text.shape[1], text.shape[0]))
-        score = cv2.resize(np.repeat(score[:,:,np.newaxis]*255,3,2).astype(np.int32), (text.shape[1], text.shape[0]))
-        debug(idx, data_loader.img_paths, [[text_box,score]], 'outputs/vis_ic15/')
+        text_box = cv2.resize(text_box, (org_img.shape[1], org_img.shape[0]))
+        score_s = cv2.resize(np.repeat(score[:,:,np.newaxis]*255,3,2).astype(np.uint8), (org_img.shape[1], org_img.shape[0]))
+        mask = cv2.resize(np.repeat(mask[:,:,np.newaxis],3,2).astype(np.uint8), (org_img.shape[1], org_img.shape[0]))
+        
+        link_score=(link_pos_scores[0,0,:,:]).cpu().numpy()*(score>0.5).astype(np.float)
+        link_score = cv2.resize(np.repeat(link_score[:,:,np.newaxis]*255,3,2).astype(np.uint8), (org_img.shape[1], org_img.shape[0]))
+        debug(idx, data_loader.img_paths, [[text_box,score_s],[link_score,mask]], 'outputs/vis_ic15/')
 
     cmd = 'cd %s;zip -j %s %s/*'%('./outputs/', 'submit_ic15.zip', 'submit_ic15');
     print(cmd)
     sys.stdout.flush()
     util.cmd.cmd(cmd)
+    cmd_eval='cd eval;sh eval_ic15.sh'
+    sys.stdout.flush()
+    util.cmd.cmd(cmd_eval)
 
 if __name__ == '__main__':
+    # import crash_on_ipy
     parser = argparse.ArgumentParser(description='Hyperparams')
-    parser.add_argument('--arch', nargs='?', type=str, default='resnet50')
+    parser.add_argument('--arch', nargs='?', type=str, default='vgg16')
     parser.add_argument('--resume', nargs='?', type=str, default=None,    
                         help='Path to previous saved model to restart from')
     parser.add_argument('--binary_th', nargs='?', type=float, default=1.0,
@@ -193,10 +171,8 @@ if __name__ == '__main__':
                         help='Path to previous saved model to restart from')
     parser.add_argument('--scale', nargs='?', type=int, default=1,
                         help='Path to previous saved model to restart from')
-    parser.add_argument('--long_size', nargs='?', type=int, default=2240,
+    parser.add_argument('--long_size', nargs='?', type=int, default=1280,
                         help='Path to previous saved model to restart from')
-    parser.add_argument('--min_kernel_area', nargs='?', type=float, default=5.0,
-                        help='min kernel area')
     parser.add_argument('--min_area', nargs='?', type=float, default=800.0,
                         help='min area')
     parser.add_argument('--min_score', nargs='?', type=float, default=0.93,

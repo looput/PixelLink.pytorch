@@ -229,8 +229,7 @@ class ResNet(nn.Module):
         out = self.conv2(out)
         out = self.relu2(self.bn2(out))
         out = self.conv3(out)
-        out = self._upsample(out, x, scale=self.scale)
-
+        
         return out
 
 

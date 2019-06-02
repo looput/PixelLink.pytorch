@@ -58,24 +58,29 @@ def evaluate_method(gtFilePath, submFilePath, evaluationParams):
         - samples (optional) Per sample metrics. Ex: {'sample1' : { 'Precision':0.8,'Recall':0.9 } , 'sample2' : { 'Precision':0.8,'Recall':0.9 }
     """    
     
-    for module,alias in evaluation_imports().iteritems():
+    for module,alias in evaluation_imports().items():
         globals()[alias] = importlib.import_module(module)    
     
     def polygon_from_points(points):
         """
         Returns a Polygon object to use with the Polygon2 class from a list of 8 points: x1,y1,x2,y2,x3,y3,x4,y4
         """        
-        resBoxes=np.empty([1,8],dtype='int32')
-        resBoxes[0,0]=int(points[0])
-        resBoxes[0,4]=int(points[1])
-        resBoxes[0,1]=int(points[2])
-        resBoxes[0,5]=int(points[3])
-        resBoxes[0,2]=int(points[4])
-        resBoxes[0,6]=int(points[5])
-        resBoxes[0,3]=int(points[6])
-        resBoxes[0,7]=int(points[7])
-        pointMat = resBoxes[0].reshape([2,4]).T
-        return plg.Polygon( pointMat)    
+        # resBoxes=np.empty([1,8],dtype='int32')
+        # resBoxes[0,0]=int(points[0])
+        # resBoxes[0,4]=int(points[1])
+        # resBoxes[0,1]=int(points[2])
+        # resBoxes[0,5]=int(points[3])
+        # resBoxes[0,2]=int(points[4])
+        # resBoxes[0,6]=int(points[5])
+        # resBoxes[0,3]=int(points[6])
+        # resBoxes[0,7]=int(points[7])
+        # pointMat = resBoxes[0].reshape([2,4]).T
+        # return plg.Polygon( pointMat)    
+        
+        p = np.array(points)
+        p = p.reshape(p.shape[0]//2, 2)
+        p = plg.Polygon(p)
+        return p
     
     def rectangle_to_polygon(rect):
         resBoxes=np.empty([1,8],dtype='int32')
@@ -198,9 +203,27 @@ def evaluate_method(gtFilePath, submFilePath, evaluationParams):
         
         if resFile in subm:
             
-            detFile = rrc_evaluation_funcs.decode_utf8(subm[resFile]) 
+            detFile = rrc_evaluation_funcs.decode_utf8(subm[resFile])
+            def get_pred(file):
+                lines = file.split('\n')
+                pointsList = []
+                for line in lines:
+                    if line == '':
+                        continue
+                    bbox = line.split(',')
+                    if len(bbox) % 2 == 1:
+                        print(path)
+                    bbox = [(int)(x) for x in bbox]
+                    pointsList.append(bbox)
+                return pointsList
+
+            # pointsList,confidencesList,_ = rrc_evaluation_funcs.get_tl_line_values_from_file_contents(detFile,evaluationParams['CRLF'],evaluationParams['LTRB'],False,evaluationParams['CONFIDENCES'])
+            # print(pointsList)
+            # print(confidencesList)
+
+            pointsList = get_pred(detFile)
+            confidencesList = [0.0] * len(pointsList)
             
-            pointsList,confidencesList,_ = rrc_evaluation_funcs.get_tl_line_values_from_file_contents(detFile,evaluationParams['CRLF'],evaluationParams['LTRB'],False,evaluationParams['CONFIDENCES'])
             for n in range(len(pointsList)):
                 points = pointsList[n]
                 
@@ -208,7 +231,7 @@ def evaluate_method(gtFilePath, submFilePath, evaluationParams):
                     detRect = Rectangle(*points)
                     detPol = rectangle_to_polygon(detRect)
                 else:
-                    detPol = polygon_from_points(points)                    
+                    detPol = polygon_from_points(points)
                 detPols.append(detPol)
                 detPolPoints.append(points)
                 if len(gtDontCarePolsNum)>0 :
@@ -313,4 +336,4 @@ def evaluate_method(gtFilePath, submFilePath, evaluationParams):
 if __name__=='__main__':
         
     rrc_evaluation_funcs.main_evaluation(None,default_evaluation_params,validate_data,evaluate_method)
-    print ''
+    print('')
