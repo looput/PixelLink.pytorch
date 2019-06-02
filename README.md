@@ -33,5 +33,5 @@ sh eval_ic15.sh
 | ICDAR2015 | No | 81.2 | 75 | 78 | 5 | 1280*768 |
 
 ## TODO
-- [ ] Find the bug of low performance 
+- [ ] Find the bug of performance issue.
 - [ ] Accomplish the code with better config file and more datasets
